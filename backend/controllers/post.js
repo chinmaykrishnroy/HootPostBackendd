@@ -58,6 +58,7 @@ export const getUserPosts = async (req, res) => {
 };
 export const createPost = async (req, res) => {
   try {
+    const minWidth=1080;
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     const allowedExtensions = /jpeg|jpg|png|gif/;
     const extname = allowedExtensions.test(
@@ -67,13 +68,17 @@ export const createPost = async (req, res) => {
     if (!extname || !mimetype) {
       return res.status(400).json({ error: "Only image files are allowed!" });
     }
+    const sizeMode = req.body.sizeMode || null;
+    const height = sizeMode 
+      ? parseInt(minWidth * (parseInt(sizeMode[0]) / parseInt(sizeMode[1])))
+      : minWidth;
     let processedImage;
     if (req.file.mimetype === 'image/gif') {
       processedImage = req.file.buffer;
     } else {
       processedImage = await sharp(req.file.buffer)
-        .resize({ width: 1200, height: 1200, fit: sharp.fit.cover })
-        .toFormat(mimetype === 'image/png' ? 'png' : 'jpeg', { quality: 80 })
+        .resize({ width: minWidth, height: height, fit: sharp.fit.contain })
+        .toFormat(mimetype === 'image/png' ? 'png' : 'jpeg', { quality: 95 })
         .toBuffer();
     }
     if (!processedImage) {
@@ -83,12 +88,14 @@ export const createPost = async (req, res) => {
       userId: req.currentUser._id,
       image: processedImage,
       caption: req.body.caption || "",
+      sizeMode: sizeMode || null
     });
     await post.save();
     req.currentUser.posts.push(post._id);
     await req.currentUser.save();
     res.status(201).json({ message: "Post created successfully", postId: post._id });
   } catch (err) {
+    console.log(err)
     res.status(500).json({ error: err.message });
   }
 };
@@ -372,17 +379,7 @@ export const downloadPost = async (req, res) => {
   }
 };
 export const getAllPosts2 = async (req, res) => {
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    const hours = String(date.getUTCHours() + 5).padStart(2, '0');
-    const minutes = String(date.getUTCMinutes() + 30).padStart(2, '0');
-    const day = String(date.getUTCDate()).padStart(2, '0');
-    const month = date.toLocaleString('default', { month: 'short' });
-    const year = String(date.getUTCFullYear()).slice(-2);
-    return `${hours}:${minutes} - ${day} ${month} ${year}`;
-  };
-  const getTimeDifference = (createdAt, updatedAt) => {
-    const now = Date.now();
+  const getTimeDifference = (createdAt, updatedAt, now) => {
     const created = new Date(createdAt).getTime();
     const updated = new Date(updatedAt).getTime();
     const isEdited = created !== updated;
@@ -403,51 +400,43 @@ export const getAllPosts2 = async (req, res) => {
     return `${isEdited ? "Reacted" : "Posted"} ${seconds} second${seconds > 1 ? "s" : ""} ago`;
   };
   try {
+    const now = Date.now();
     const user = await User.findById(req.currentUser._id)
       .populate({
         path: "connections",
-        select: "posts username profilePicture",
+        select: "posts username profilePictureSmall firstName lastName",
         populate: {
           path: "posts",
           model: "Post",
+          select: "caption createdAt updatedAt likedBy likeCount sizeMode image",
         },
       })
-      .populate("posts")
+      .populate({
+        path: "posts",
+        select: "caption createdAt updatedAt likedBy likeCount sizeMode image",
+      })
       .lean();
-    const resizeImage = (buffer) => {
-      if (!buffer) return null;
-      const base64Image = buffer.toString('base64');
-      return `data:image/jpeg;base64,${base64Image}`;
-    };
-    let allPosts = [
-      ...user.posts.map((post) => ({
-        postId: post._id,
-        caption: post.caption || "",
-        image: post.image,
-        createdAt: post.createdAt,
-        time: formatDate(post.createdAt),
-        updatedAt: getTimeDifference(post.createdAt, post.updatedAt),
-        username: user.username,
-        liked: post.likedBy && post.likedBy.some(id => id.equals(req.currentUser._id)),
-        profilePicture: resizeImage(user.profilePicture),
-        likeCount: post.likeCount || post.likedBy.length,
-      })),
-      ...user.connections.flatMap((connection) =>
-        connection.posts.map((post) => ({
-          postId: post._id,
-          caption: post.caption || "",
-          image: post.image,
-          createdAt: post.createdAt,
-          time: formatDate(post.createdAt),
-          updatedAt: getTimeDifference(post.createdAt, post.updatedAt),
-          username: connection.username,
-          liked: post.likedBy && post.likedBy.some(id => id.equals(req.currentUser._id)),
-          profilePicture: resizeImage(connection.profilePicture),
-          likeCount: post.likeCount || post.likedBy.length,
-        }))
-      ),
+    const resizeImage = (buffer) => buffer ? `data:image/jpeg;base64,${buffer.toString('base64')}` : null;
+    const transformPost = (post, username, name, profilePictureSmall) => ({
+      postId: post._id,
+      caption: post.caption || "",
+      createdAt: post.createdAt,
+      updatedAt: getTimeDifference(post.createdAt, post.updatedAt, now),
+      username,
+      name,
+      liked: post.likedBy?.some(id => id.equals(req.currentUser._id)) || false,
+      profilePicture: resizeImage(profilePictureSmall),
+      likeCount: post.likeCount || post.likedBy.length,
+      sizeMode: post.sizeMode,
+      image: post.image,
+    });
+    const allPosts = [
+      ...user.posts.map(post => transformPost(post, user.username, `${user.firstName} ${user.lastName}`, user.profilePictureSmall)),
+      ...user.connections.flatMap(connection => 
+        connection.posts.map(post => transformPost(post, connection.username, `${connection.firstName} ${connection.lastName}`, connection.profilePictureSmall))
+      )
     ];
-    allPosts = allPosts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    allPosts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.status(200).json(allPosts);
   } catch (err) {
     res.status(500).json({ error: err.message });

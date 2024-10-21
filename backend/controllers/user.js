@@ -78,10 +78,15 @@ export const uploadProfilePicture = async (req, res) => {
     } else {
       compressedImage = await sharp(req.file.buffer)
         .resize({ width: 1080, height: 1080, fit: sharp.fit.cover })
-        .toFormat(mimetype === 'image/png' ? 'png' : 'jpeg', { quality: 75 })
+        .toFormat(mimetype === 'image/png' ? 'png' : 'jpeg', { quality: 95 })
         .toBuffer();
     }
+    const smallProfilePicture = await sharp(req.file.buffer)
+      .resize(200, 200)
+      .toFormat(mimetype === 'image/png' ? 'png' : 'jpeg', { quality: 95 })
+      .toBuffer();
     req.currentUser.profilePicture = compressedImage;
+    req.currentUser.profilePictureSmall = smallProfilePicture;
     await req.currentUser.save();
     res.status(200).send("Profile picture updated successfully");
   } catch (err) {
@@ -294,26 +299,45 @@ export const viewBlockList = async (req, res) => {
     handleError(res, err);
   }
 };
-export const getAllNonBlockedUsers = async (req, res) => {
+export const getAllAppUsers = async (req, res) => {
   try {
-    const users = await User.find().select("firstName profilePicture _id blockedUsers");
+    const currentUserId = req.currentUser._id;
+    const users = await User.find({ _id: { $ne: currentUserId } })
+      .select("firstName profilePictureSmall _id blockedUsers connections");
     const currentUserBlockedUsers = req.currentUser.blockedUsers || [];
-    const resizeImage = (buffer) => {
-      if (!buffer) return null;
-      const base64Image = buffer.toString('base64');
-      return `data:image/jpeg;base64,${base64Image}`;
-    };
+    const bufferToBase64 = (buffer) => buffer ? `data:image/jpeg;base64,${buffer.toString('base64')}` : null;
+    let currentUserProfilePicture = bufferToBase64(req.currentUser.profilePictureSmall);
+    if (!currentUserProfilePicture && req.currentUser.profilePicture) {
+      currentUserProfilePicture = bufferToBase64(await sharp(req.currentUser.profilePicture).resize(72, 72).toBuffer());
+    }
     const accessibleUsers = users.filter(user => {
-      const userBlockedUsers = user.blockedUsers || [];
       const isBlockedByCurrentUser = currentUserBlockedUsers.includes(user._id);
-      const hasBlockedCurrentUser = userBlockedUsers.includes(req.currentUser._id);
+      const hasBlockedCurrentUser = (user.blockedUsers || []).includes(currentUserId);
       return !isBlockedByCurrentUser && !hasBlockedCurrentUser;
-    }).map(user => ({
-      _id: user._id,
-      firstName: user.firstName,
-      profilePicture: resizeImage(user.profilePicture),
-    }));
-    res.json(accessibleUsers);
+    });
+    const connectedUsers = accessibleUsers.filter(user => req.currentUser.connections.includes(user._id));
+    const otherUsers = accessibleUsers.filter(user => !req.currentUser.connections.includes(user._id));
+    const formattedUsers = [
+      {
+        _id: currentUserId,
+        firstName: 'YOU',
+        profilePicture: currentUserProfilePicture,
+        who: 'u',
+      },
+      ...connectedUsers.map(user => ({
+        _id: user._id,
+        firstName: user.firstName,
+        profilePicture: bufferToBase64(user.profilePictureSmall),
+        who: 'c',
+      })),
+      ...otherUsers.map(user => ({
+        _id: user._id,
+        firstName: user.firstName,
+        profilePicture: bufferToBase64(user.profilePictureSmall),
+        who: 'n',
+      }))
+    ];
+    res.json(formattedUsers);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -353,6 +377,25 @@ export const getUserById = async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+};
+export const getNotifications = async (req, res) => {
+  try {
+    const user = await User.findById(req.currentUser._id).populate(
+      "connectionRequests",
+      "username"
+    );
+    if (!user) return res.status(404).send("User not found");
+
+    const notifications = user.connectionRequests.map((request) => ({
+      _id: request._id,
+      username: request.username,
+      type: "connection request",
+    }));
+
+    res.status(200).json(notifications);
+  } catch (err) {
+    handleError(res, err);
   }
 };
 

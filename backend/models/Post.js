@@ -7,6 +7,7 @@ const postSchema = new mongoose.Schema({
   caption: { type: String, maxlength: 150 },
   likeCount: { type: Number, default: 0 },
   likedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  sizeMode: { type: String, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 }, { timestamps: true });

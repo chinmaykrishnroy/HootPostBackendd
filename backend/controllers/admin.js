@@ -106,3 +106,14 @@ export const deleteLargeBuffers = async (req, res) => {
     res.status(400).send(err.message);
   }
 };
+export const deleteAllPosts = async (req, res) => {
+  const { adminPassword } = req.body;
+  if (adminPassword !== "12345") 
+    return res.status(403).send("Invalid admin password");
+  try {
+    await Post.deleteMany({});
+    res.status(200).send("All posts deleted successfully");
+  } catch (err) {
+    res.status(400).send(err.message);
+  }
+};
