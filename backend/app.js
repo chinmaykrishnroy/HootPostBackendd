@@ -35,16 +35,20 @@ app.use((req, res, next) => {
 //   .catch(err => console.error(err));
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-  const initializeApp = async () => {
-    mongoose.connect(config.mongoURI)
-      .then(() => {
-        console.log('MongoDB connected');
-        await delay(2 * 60 * 1000);
-        return initializeS3();
-      })
-      .catch(err => console.error(err));
-  };
 
+const initializeApp = async () => {
+  try {
+    await mongoose.connect(config.mongoURI);
+    console.log('MongoDB connected');
+    
+    await delay(2 * 60 * 1000);
+    await initializeS3();
+  } catch (err) {
+    console.error(err);
+  }
+};
+
+initializeApp();
 initializeApp();
 
 // Middleware
