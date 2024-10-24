@@ -59,7 +59,9 @@ export const loginUser = async (req, res) => {
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
     req.io.emit('user_logged_in', { userId: user._id, username: user.username });
-    res.status(201).json({ success: "Log in successful!" });
+    res.status(201).json({ success: "Log in successful!", 
+      userId: user._id, 
+      username: user.username });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

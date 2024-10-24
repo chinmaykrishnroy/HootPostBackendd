@@ -10,8 +10,9 @@ import userRoutes from './routes/user.js';
 import chatRoutes from './routes/chat.js';
 import adminRoutes from './routes/admin.js';
 import postRoutes from './routes/post.js';
+import config from './config/config.js';
 import './utility/deletemsgs.js';
-
+import { initializeS3 } from './utility/s3client.js';
 
 dotenv.config();
 
@@ -25,9 +26,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// MongoDB connection
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('MongoDB connected'))
+// MongoDB connection and S3 initialization
+mongoose.connect(config.mongoURI)
+  .then(() => {
+    console.log('MongoDB connected');
+    return initializeS3();
+  })
   .catch(err => console.error(err));
 
 // Middleware
@@ -42,7 +46,7 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/posts', postRoutes);
 app.use('/api/admin', adminRoutes);
 
-// Socket.IO for real-time messaging
+// Socket.IO
 io.on('connection', socket => {
   console.log(`User connected: ${socket.id}`);
   socket.on('disconnect', () => {
@@ -65,5 +69,5 @@ process.on('SIGTERM', () => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = config.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));

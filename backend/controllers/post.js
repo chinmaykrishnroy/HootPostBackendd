@@ -2,6 +2,7 @@ import sharp from "sharp";
 import path from "path";
 import Post from "../models/Post.js";
 import User from "../models/User.js";
+import { uploadFileToS3, generateSignedUrl, deleteFileFromS3 } from '../utility/s3client.js';
 
 export const getAllPosts = async (req, res) => {
   try {
@@ -68,27 +69,25 @@ export const createPost = async (req, res) => {
     if (!extname || !mimetype) {
       return res.status(400).json({ error: "Only image files are allowed!" });
     }
-    const sizeMode = req.body.sizeMode || null;
-    const height = sizeMode 
-      ? parseInt(minWidth * (parseInt(sizeMode[0]) / parseInt(sizeMode[1])))
-      : minWidth;
     let processedImage;
     if (req.file.mimetype === 'image/gif') {
       processedImage = req.file.buffer;
     } else {
       processedImage = await sharp(req.file.buffer)
-        .resize({ width: minWidth, height: height, fit: sharp.fit.contain })
-        .toFormat(mimetype === 'image/png' ? 'png' : 'jpeg', { quality: 95 })
+        .resize({ width: minWidth, height: undefined, fit: sharp.fit.cover })
+        .toFormat(mimetype === 'image/png' ? 'png' : 'jpeg', { quality: 25 })
         .toBuffer();
     }
     if (!processedImage) {
       return res.status(400).json({ error: "Image processing failed." });
     }
+    const fileName = `${req.currentUser._id}-${Date.now()}.${req.file.mimetype.split('/')[1]}`;
+    const fileUrl = await uploadFileToS3(processedImage, fileName, req.file.mimetype);
     const post = new Post({
       userId: req.currentUser._id,
-      image: processedImage,
+      image: fileUrl,
       caption: req.body.caption || "",
-      sizeMode: sizeMode || null
+      sizeMode: req.body.sizeMode || null
     });
     await post.save();
     req.currentUser.posts.push(post._id);
@@ -104,14 +103,14 @@ export const deletePost = async (req, res) => {
   try {
     const { postId } = req.params;
     const post = await Post.findById(postId);
+    if (post.userId.toString() !== req.currentUser._id.toString()) {
+      return res.status(403).json({ error: "Not authorized to delete this post!" });
+    }
     if (!post) {
       return res.status(404).json({ error: "Post not found!" });
     }
-    if (post.userId.toString() !== req.currentUser._id.toString()) {
-      return res
-        .status(403)
-        .json({ error: "Not authorized to delete this post!" });
-    }
+    const imageFileName = post.image.split('/').pop();
+    await deleteFileFromS3(imageFileName);
     req.currentUser.posts.pull(postId);
     await req.currentUser.save();
     await Post.findByIdAndDelete(postId);
@@ -372,8 +371,10 @@ export const downloadPost = async (req, res) => {
     if (!isOwner && !isConnection) {
       return res.status(403).json({ error: 'Access denied: User is not a connection' });
     }
-    const base64Image = post.image.toString('base64');
-    res.status(200).json({ image: `data:image/jpeg;base64,${base64Image}` });
+    const fileName = post.image.split('/').pop();
+    const signedUrl = await generateSignedUrl(fileName, 30);
+    // const base64Image = post.image.toString('base64');
+    res.status(200).json({ image: signedUrl });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -399,12 +400,18 @@ export const getAllPosts2 = async (req, res) => {
     if (minutes > 0) return `${isEdited ? "Reacted" : "Posted"} ${minutes} minute${minutes > 1 ? "s" : ""} ago`;
     return `${isEdited ? "Reacted" : "Posted"} ${seconds} second${seconds > 1 ? "s" : ""} ago`;
   };
+  const signedUrl = async (url) => {
+    if (!url || typeof url !== 'string') return null;
+    const fileName = url.split('/').pop();
+    const URL = await generateSignedUrl(fileName, 120);
+    return URL;
+  };
   try {
     const now = Date.now();
     const user = await User.findById(req.currentUser._id)
       .populate({
         path: "connections",
-        select: "posts username profilePictureSmall firstName lastName",
+        select: "posts username profilePicture firstName lastName",
         populate: {
           path: "posts",
           model: "Post",
@@ -416,26 +423,33 @@ export const getAllPosts2 = async (req, res) => {
         select: "caption createdAt updatedAt likedBy likeCount sizeMode image",
       })
       .lean();
-    const resizeImage = (buffer) => buffer ? `data:image/jpeg;base64,${buffer.toString('base64')}` : null;
-    const transformPost = (post, username, name, profilePictureSmall) => ({
-      postId: post._id,
-      caption: post.caption || "",
-      createdAt: post.createdAt,
-      updatedAt: getTimeDifference(post.createdAt, post.updatedAt, now),
-      username,
-      name,
-      liked: post.likedBy?.some(id => id.equals(req.currentUser._id)) || false,
-      profilePicture: resizeImage(profilePictureSmall),
-      likeCount: post.likeCount || post.likedBy.length,
-      sizeMode: post.sizeMode,
-      image: post.image,
-    });
-    const allPosts = [
-      ...user.posts.map(post => transformPost(post, user.username, `${user.firstName} ${user.lastName}`, user.profilePictureSmall)),
+    // const resizeImage = (buffer) => buffer ? `data:image/jpeg;base64,${buffer.toString('base64')}` : null;
+    const transformPost = async (post, username, name, profilePicture) => {
+      const image = await signedUrl(post.image);
+      const profileUrl = await signedUrl(profilePicture);
+      return {
+        postId: post._id,
+        caption: post.caption || "",
+        createdAt: post.createdAt,
+        updatedAt: getTimeDifference(post.createdAt, post.updatedAt, now),
+        username,
+        name,
+        liked: post.likedBy?.some(id => id.equals(req.currentUser._id)) || false,
+        profilePicture: profileUrl,
+        // profilePicture: resizeImage(profilePictureSmall),
+        likeCount: post.likeCount || post.likedBy.length,
+        sizeMode: post.sizeMode,
+        image,
+      };
+    };
+    const allPostsPromises = [
+      ...user.posts.map(post => transformPost(post, user.username, `${user.firstName} ${user.lastName}`, user.profilePicture)),
       ...user.connections.flatMap(connection => 
-        connection.posts.map(post => transformPost(post, connection.username, `${connection.firstName} ${connection.lastName}`, connection.profilePictureSmall))
+        connection.posts.map(post => transformPost(post, connection.username, `${connection.firstName} ${connection.lastName}`, connection.profilePicture))
       )
     ];
+    const allPosts = await Promise.all(allPostsPromises);
+    // console.log("All Posts: ", allPosts);
     allPosts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.status(200).json(allPosts);
   } catch (err) {

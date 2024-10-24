@@ -2,13 +2,13 @@ import User from "../models/User.js";
 import Post from "../models/Post.js";
 import Chat from "../models/Chat.js";
 import { handleError } from "../utility/fileutils.js";
-import dotenv from 'dotenv';
-dotenv.config();
+import config from '../config/config.js';
+import { deleteFileFromS3, deleteMultipleFilesFromS3, deleteAllFilesFromS3 } from '../utility/s3client.js';
 
 export const getAllUsers = async (req, res) => {
   const { adminPassword } = req.body;
   try {
-    if (adminPassword !== "12345")
+    if (adminPassword !== config.ADMIN)
       return res.status(403).send("Unauthorized: Invalid admin password");
     const users = await User.find();
     res.json(users);
@@ -18,9 +18,16 @@ export const getAllUsers = async (req, res) => {
 };
 export const deleteAllUsers = async (req, res) => {
   const { adminPassword } = req.body;
-  if (adminPassword !== "12345") 
+  if (adminPassword !== config.ADMIN) 
     return res.status(403).send("Invalid admin password");
   try {
+    const users = await User.find({ profilePicture: { $exists: true } });
+    const profilePictures = users
+      .map(user => user.profilePicture.split('/').pop().split('?')[0])
+    if (profilePictures.length > 0) {
+      await deleteMultipleFilesFromS3(profilePictures);
+    }
+    await deleteAllFilesFromS3()
     await User.deleteMany({});
     await Post.deleteMany({});
     await Chat.deleteMany({});
@@ -33,29 +40,49 @@ export const deleteUser = async (req, res) => {
   const { username, adminPassword } = req.body;
 
   try {
-    if (adminPassword !== "12345")
+    if (adminPassword !== config.ADMIN)
       return res.status(403).send("Unauthorized: Invalid admin password");
 
     const user = await User.findOne({ username });
 
     if (!user) return res.status(404).send("User not found");
 
-    const chats = await Chat.find({ participants: user._id });
-
-    await User.deleteOne({ _id: user._id });
-
-    for (const chat of chats) {
-      const allDeleted = chat.participants.every(participant => participant.toString() !== user._id.toString());
-      if (allDeleted) {
-        await Chat.deleteOne({ _id: chat._id });
-      }
+    const userId = user._id;
+    if (user.profilePicture) {
+      const profilePicFileName = user.profilePicture.split('/').pop();
+      await deleteFileFromS3(profilePicFileName);
     }
+    const posts = await Post.find({ userId });
+    const chats = await Chat.find({ participants: userId });
+    const postDeletionPromises = posts.map(async post => {
+      const postImageFileName = post.image.split('/').pop();
+      await deleteFileFromS3(postImageFileName);
+    });
+    await Post.deleteMany({ userId });
+    const chatUpdatePromises = chats.map(async chat => {
+      const messageFileDeletionPromises = chat.messages.map(async message => {
+        if (message.file) {
+          const messageFileName = `message-${message._id}`;
+          await deleteFileFromS3(messageFileName);
+        }
+      });
+      await Promise.all(messageFileDeletionPromises);
+      chat.participants = chat.participants.filter(participant => participant.toString() !== userId.toString());
+      if (chat.participants.length === 0) {
+        await Chat.deleteOne({ _id: chat._id });
+      } else {
+        await chat.save();
+      }
+    });
+    await User.deleteOne({ _id: userId });
+    await Promise.all([...postDeletionPromises, ...chatUpdatePromises]);
 
-    res.status(200).send("User deleted successfully");
+    res.status(200).send("User and related data deleted successfully");
   } catch (err) {
     res.status(400).send(err.message);
   }
 };
+
 export const deleteLargeBuffers = async (req, res) => {
   const { adminPassword, sizeLimitMB } = req.body;
   const sizeLimit = sizeLimitMB * 1024 * 1024;
@@ -108,9 +135,15 @@ export const deleteLargeBuffers = async (req, res) => {
 };
 export const deleteAllPosts = async (req, res) => {
   const { adminPassword } = req.body;
-  if (adminPassword !== "12345") 
+  if (adminPassword !== config.ADMIN) 
     return res.status(403).send("Invalid admin password");
   try {
+    const posts = await Post.find({ imageUrl: { $exists: true } });
+    const imageUrls = posts
+      .map(post => post.imageUrl.split('/').pop().split('?')[0]);
+    if (imageUrls.length > 0) {
+      await deleteMultipleFilesFromS3(imageUrls);
+    }
     await Post.deleteMany({});
     res.status(200).send("All posts deleted successfully");
   } catch (err) {

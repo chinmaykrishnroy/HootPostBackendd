@@ -1,12 +1,11 @@
 import mongoose from 'mongoose';
-import sharp from 'sharp';
 
 // Users Schema
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  profilePicture: { type: Buffer },
+  profilePicture: { type: String },
   profilePictureSmall: { type: Buffer },
   firstName: { type: String, required: true },
   lastName: { type: String },
@@ -20,16 +19,5 @@ const userSchema = new mongoose.Schema({
   posts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Post' }],
   currentSessionId: { type: String },
 }, { timestamps: true });
-
-userSchema.pre('save', async function (next) {
-  if (this.isModified('profilePicture') && this.profilePicture) {
-    try {
-      this.profilePictureSmall = await sharp(this.profilePicture).resize(72, 72).toBuffer();
-    } catch (err) {
-      console.error('Error resizing profile picture:', err);
-    }
-  }
-  next();
-});
 
 export default mongoose.model('User', userSchema);

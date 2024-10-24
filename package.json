@@ -5,7 +5,6 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node backend/app.js",
     "dev": "nodemon backend/app.js"
   },
   "type": "module",
@@ -13,6 +12,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.676.0",
+    "@aws-sdk/s3-request-presigner": "^3.676.0",
+    "aws-sdk": "^2.1691.0",
+    "axios": "^1.7.7",
+    "backblaze-b2": "^1.7.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
