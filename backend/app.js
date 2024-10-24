@@ -26,13 +26,26 @@ app.use((req, res, next) => {
   next();
 });
 
-// MongoDB connection and S3 initialization
-mongoose.connect(config.mongoURI)
-  .then(() => {
-    console.log('MongoDB connected');
-    return initializeS3();
-  })
-  .catch(err => console.error(err));
+// // MongoDB connection and S3 initialization
+// mongoose.connect(config.mongoURI)
+//   .then(() => {
+//     console.log('MongoDB connected');
+//     return initializeS3();
+//   })
+//   .catch(err => console.error(err));
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const initializeApp = async () => {
+    mongoose.connect(config.mongoURI)
+      .then(() => {
+        console.log('MongoDB connected');
+        await delay(2 * 60 * 1000);
+        return initializeS3();
+      })
+      .catch(err => console.error(err));
+  };
+
+initializeApp();
 
 // Middleware
 app.use(cors());
